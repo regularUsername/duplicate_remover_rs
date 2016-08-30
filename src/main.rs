@@ -1,4 +1,3 @@
-extern crate glob;
 #[macro_use]
 extern crate lazy_static;
 extern crate regex;
@@ -14,7 +13,6 @@ use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
-use glob::{glob,PatternError,Paths};
 use std::collections::HashMap;
 use std::fs::{File, create_dir_all, rename, read_dir};
 use std::io::{BufReader, BufRead,stdin, stdout,Write};
@@ -62,31 +60,6 @@ enum Foobar<'a> {
     Ok(Vec<&'a PathBuf>),
     Cancel,
     Invalid,
-}
-
-trait GlobT {
-    fn glob(&self, pattern: &str) -> Result<Paths, PatternError>;
-}
-
-impl GlobT for Path {
-    fn glob(&self, pattern: &str) -> Result<Paths, PatternError> {
-        if self.is_dir() {
-            match self.join(pattern).to_str() {
-                Some(t) => glob(t),
-                None => {
-                    Err(PatternError {
-                        pos: 0,
-                        msg: "invalid unicode?",
-                    })
-                }
-            }
-        } else {
-            Err(PatternError {
-                pos: 0,
-                msg: "Not a Directory",
-            })
-        }
-    }
 }
 
 fn main() {
@@ -294,16 +267,6 @@ fn do_stuff(dir: &Path, recursive: bool) {
     println!("Pass1...");
     // pass1
     let mut pass1_files = HashMap::new();
-
-    // for entry in dir.glob(if recursive { "**/*" } else { "*" })
-    //     .expect("Failed to read glob pattern")
-    //     .filter_map(Result::ok)
-    //     .filter(|e| e.is_file())
-    //     .filter(|e| !e.to_str().unwrap().contains("duplicates"))
-    // {
-    //     let size = get_size!(entry.metadata().unwrap());
-    //     pass1_files.entry(size).or_insert_with(Vec::new).push(entry);
-    // }
 
     if recursive {
         for entry in WalkDir::new(&dir)
