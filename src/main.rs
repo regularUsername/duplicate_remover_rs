@@ -6,13 +6,12 @@ extern crate twox_hash;
 extern crate pbr;
 extern crate walkdir;
 
-
-use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::fs::{File, create_dir_all, rename, read_dir};
 use std::io::{BufReader, BufRead,stdin, stdout,Write};
@@ -25,9 +24,10 @@ use pbr::ProgressBar;
 use walkdir::WalkDir;
 
 lazy_static! {
-    static ref IS_NUMERIC:Regex = Regex::new(r"^[:digit:]+$").unwrap();
-    static ref IS_HEX:Regex = Regex::new(r"^[:xdigit:]+$").unwrap();
-    static ref IS_ALNUM:Regex = Regex::new(r"^[:alnum:]+$").unwrap();
+    static ref IS_NUMERIC: Regex = Regex::new(r"^[:digit:]+$").unwrap();
+    static ref IS_HEX: Regex = Regex::new(r"^[:xdigit:]+$").unwrap();
+    static ref IS_ALNUM: Regex = Regex::new(r"^[:alnum:]+$").unwrap();
+    static ref RE_WORDS: Regex = Regex::new(r"[:alnum:]{2,}").unwrap();
 }
 
 // TODO zusatzmodus: wenn rekursiv nur duplikate entfernen wenn beide im selbem ordner sind
@@ -54,6 +54,9 @@ macro_rules! file_stem {
 
 macro_rules! file_name {
     ($x:expr) => ($x.file_name().unwrap_or(std::ffi::OsStr::new("decoding error")).to_str().unwrap_or("decoding error"))
+}
+macro_rules! count_words {
+    ($x:expr) => (RE_WORDS.captures_iter($x).count())
 }
 
 enum Foobar<'a> {
@@ -84,7 +87,6 @@ fn main() {
      do_stuff(dir, matches.is_present("recursive"));
 }
 
-// TODO diesen fall erkennen "tmp_3336-28f644e8585f21d51362c3b847580546123518181.png" vs "1239833_-_Jigglybutts_Mew_Porkyman.png"
 fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
     let mut tmp = Vec::from(files);
     for x in files {
@@ -121,7 +123,7 @@ fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
                 bestname = x;
                 bestname_prio = 3;
             }
-        } else if bestname_prio < 4 || (bestname_prio == 4 && n.len() > current_n.len()) {
+        } else if bestname_prio < 4 || (bestname_prio == 4 && count_words!(n) > count_words!(current_n)) { // hier anstatt der länge die anzahl der wörter priorisieren
             bestname = x;
             bestname_prio = 4;
         }
@@ -197,7 +199,6 @@ fn select_action(dups: HashMap<u64,Vec<&PathBuf>>,dir: &Path) {
                         Foobar::Invalid => println!("invalid input"),
                     };
                 }
-                
             }
             break;
         } else if buf.starts_with('p') {
