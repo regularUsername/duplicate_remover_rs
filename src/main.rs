@@ -14,8 +14,8 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::fs::{File, create_dir_all, rename, read_dir};
-use std::io::{BufReader, BufRead,stdin, stdout,Write};
-use std::hash::Hasher;
+use std::io::{BufReader, BufRead, stdin, stdout, Write};
+use std::hash::{Hasher,BuildHasherDefault};
 use std::time::SystemTime;
 use regex::Regex;
 use clap::{Arg, App};
@@ -30,7 +30,7 @@ lazy_static! {
     static ref RE_WORDS: Regex = Regex::new(r"[:alnum:]{2,}").unwrap();
 }
 
-// TODO zusatzmodus: wenn rekursiv nur duplikate entfernen wenn beide im selbem ordner sind
+// TODO idee für zusatzmodus: wenn rekursiv nur duplikate entfernen wenn beide im selbem ordner sind
 macro_rules! println_stderr(
     ($($arg:tt)*) => { {
         let r = writeln!(&mut ::std::io::stderr(), $($arg)*);
@@ -52,9 +52,6 @@ macro_rules! file_stem {
     ($x:expr) => ($x.file_stem().unwrap_or(std::ffi::OsStr::new("decoding error")).to_str().unwrap_or("decoding error"))
 }
 
-macro_rules! file_name {
-    ($x:expr) => ($x.file_name().unwrap_or(std::ffi::OsStr::new("decoding error")).to_str().unwrap_or("decoding error"))
-}
 macro_rules! count_words {
     ($x:expr) => (RE_WORDS.captures_iter($x).count())
 }
@@ -62,6 +59,7 @@ macro_rules! count_words {
 enum Foobar<'a> {
     Ok(Vec<&'a PathBuf>),
     Cancel,
+    Skip,
     Invalid,
 }
 
@@ -70,7 +68,7 @@ fn main() {
         .version("0.1")
         .about("Finds and removes duplicate files (prioritizing the best name)")
         .arg(Arg::with_name("recursive")
-            .help("Searches duplicates in subdirectories")
+            .help("Searches duplicate files in subdirectories")
             .short("r")
             .long("recursive"))
         .arg(Arg::with_name("directory")
@@ -84,85 +82,99 @@ fn main() {
         println_stderr!("Not valid Directory");
         return;
     }
-     do_stuff(dir, matches.is_present("recursive"));
+    do_stuff(dir, matches.is_present("recursive"));
 }
 
-fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
-    let mut tmp = Vec::from(files);
-    for x in files {
-        for y in files {
-            let x_name = file_stem!(x);
-            let y_name = file_stem!(y);
-            if x_name != y_name && x_name.starts_with(y_name) {
-                if x_name.len() - y_name.len() <= 5 {
-                    tmp.retain(|e| e != x)
-                } else {
-                    tmp.retain(|e| e != y)
+fn do_stuff(dir: &Path, recursive: bool) {
+    let mut dup_count = 0u64;
+    let mut dup_size = 0u64;
+    let t = SystemTime::now();
+    println!("Pass1...");
+    // pass1
+    // wenn ich schon twox_hash beneutze um die dateien zu vergleichen kann ich es auch für die hashmap benutzen
+    let mut pass1_files: HashMap<_, _, BuildHasherDefault<XxHash>> = Default::default();
+    let mut pass1_cnt = 0u64;
+    let mut pass1_size = 0u64;
+
+    // TODO dateien ignorieren die im "duplicates" ordner liegen
+    if recursive {
+        for entry in WalkDir::new(&dir)
+            .into_iter()
+            .filter_map(|e| e.ok()) {
+            match entry.metadata() {
+                Ok(ref m) if m.file_type().is_file() => {
+                    let size = get_size!(m);
+                    pass1_files.entry(size).or_insert_with(Vec::new).push(entry.path().to_owned());
+                    pass1_cnt +=1;
+                    pass1_size += size;
                 }
-            }
+                Err(e) => println_stderr!("{:?}",e),
+                _ => (),
+            };
+        }
+    } else {
+        for entry in read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok()) {
+            match entry.metadata() {
+                Ok(ref m) if m.file_type().is_file() => {
+                    let size = get_size!(m);
+                    pass1_files.entry(size).or_insert_with(Vec::new).push(entry.path().to_owned());
+                    pass1_cnt +=1;
+                    pass1_size += size;
+                }
+                Err(e) => println_stderr!("{:?}",e),
+                _ => (),
+            };
         }
     }
 
-    let mut bestname = tmp[0];
-    let mut bestname_prio = 0;
-    for x in &tmp {
-        let n = file_stem!(x);
-        let current_n = file_stem!(bestname);
-        if IS_NUMERIC.is_match(n) {
-            if bestname_prio < 1 || (bestname_prio == 1 && n.len() > current_n.len()) {
-                bestname = x;
-                bestname_prio = 1;
-            }
-        } else if IS_HEX.is_match(n) {
-            if bestname_prio < 2 || (bestname_prio == 2 && n.len() > current_n.len()) {
-                bestname = x;
-                bestname_prio = 2;
-            }
-        } else if IS_ALNUM.is_match(n) {
-            if bestname_prio < 3 || (bestname_prio == 3 && n.len() > current_n.len()) {
-                bestname = x;
-                bestname_prio = 3;
-            }
-        } else if bestname_prio < 4 || (bestname_prio == 4 && count_words!(n) > count_words!(current_n)) { // hier anstatt der länge die anzahl der wörter priorisieren
-            bestname = x;
-            bestname_prio = 4;
+
+    // let pass1_vec: Vec<_> = pass1_files.iter().filter(|&(_,y)| y.len() > 1).map(|(x,y)|y).collect();
+    println!("Pass2: Hashing Files");
+    // pass2
+    let mut pass2_files: HashMap<_, _, BuildHasherDefault<XxHash>> = Default::default();
+    let mut pb = ProgressBar::new(pass1_files.values()
+        .filter(|x| x.len() > 1)
+        .flat_map(|v| v.iter())
+        .count() as u64);
+    pb.format("8=D~D");
+
+    for entry in pass1_files.values().filter(|x| x.len() > 1).flat_map(|v| v.iter()) {
+        let hash = hash_file(entry);
+
+        let mut list = pass2_files.entry(hash).or_insert_with(Vec::new);
+        if !list.is_empty() {
+            dup_count += 1;
+            if let Ok(m) = entry.metadata() {
+                dup_size += get_size!(m)
+            };
         }
+        list.push(entry);
+
+        pb.inc();
     }
-    let mut tmp = Vec::from(files);
-    tmp.retain(|e| e != &bestname);
+    pb.finish();
 
-    // println!("keep: {:?}",bestname);
-    // println!("delete: {:?}\n",tmp);
-    (bestname, tmp)
+    println!("\nPass2 finished");
+    let dt = t.elapsed().unwrap();
+    println!("Time elapsed: {}.{}s",
+             dt.as_secs(),
+             (dt.subsec_nanos() / 1000 / 1000) as u64);
+
+    println!("Scanned {} file(s) ({})",pass1_cnt,bytes_to_si(pass1_size));
+    println!("{} duplicates founds ({})", dup_count,bytes_to_si(dup_size));
+
+    if dup_count == 0 {
+        return;
+    }
+
+    select_action(pass2_files, dir);
 }
 
-fn backup_file(fp: &Path, basedir: &Path) -> Result<(), String> {
-    let backupdir = basedir.join(Path::new("duplicates"));
-    let p_bak = backupdir.join(match fp.strip_prefix(basedir) {
-        Ok(v) => v,
-        Err(e) => return Err(format!("convert absolute to relative path: {}", e)),
-    });
-
-    // println!("{:?} -> {:?}", fp, p_bak);
-    if let Err(e) =  create_dir_all(
-        match p_bak.parent() {
-            Some(v) => v,
-            None => return Err("Something happened".to_string()),
-        })
-    {
-        return Err(format!("Create Backup Dir: {}", e));
-    };
-
-    if let Err(e) = rename(fp, &p_bak) {
-        return Err(format!("Move file: {}", e));
-    };
-
-    Ok(())
-}
-
-fn select_action(dups: HashMap<u64,Vec<&PathBuf>>,dir: &Path) {
+fn select_action(dups: HashMap<u64, Vec<&PathBuf>,BuildHasherDefault<XxHash>>, dir: &Path) {
     loop {
-        print!("remove all duplicates?(backup in {:?}) ([y]es/[i]nteractive mode/[n]o/[p]rint): ",dir.join("duplicates"));
+        print!("remove all duplicates?(backup in {:?}) ([y]es/[i]nteractive mode/[q]uit/[p]rint): ",dir.join("duplicates"));
         stdout().flush().unwrap();
         let mut buf = String::new();
         stdin().read_line(&mut buf).unwrap();
@@ -183,7 +195,7 @@ fn select_action(dups: HashMap<u64,Vec<&PathBuf>>,dir: &Path) {
             for entry in dups.values().filter(|x| x.len() > 1) {
                 let (keep, remove) = select_files(entry);
                 loop {
-                    match interactive_selection(keep,&remove){
+                    match interactive_selection(dir, keep, &remove) {
                         Foobar::Ok(l) => {
                             for i in l {
                                 if let Err(e) = backup_file(i, dir) {
@@ -191,11 +203,12 @@ fn select_action(dups: HashMap<u64,Vec<&PathBuf>>,dir: &Path) {
                                 }
                             }
                             break;
-                        },
+                        }
+                        Foobar::Skip => break,
                         Foobar::Cancel => {
                             println!("Cancel");
                             return;
-                            },
+                        }
                         Foobar::Invalid => println!("invalid input"),
                     };
                 }
@@ -204,16 +217,14 @@ fn select_action(dups: HashMap<u64,Vec<&PathBuf>>,dir: &Path) {
         } else if buf.starts_with('p') {
             for entry in dups.values().filter(|x| x.len() > 1) {
                 let (keep, remove) = select_files(entry);
-                println!("keep: {:?}",
-                         keep.file_name().unwrap_or(std::ffi::OsStr::new("decoding error")));
+                println!("keep  : {:?}", keep.strip_prefix(dir).unwrap());
                 for r in remove {
-                    println!("delete: {:?}",
-                             r.file_name().unwrap_or(std::ffi::OsStr::new("decoding error")));
+                    println!("delete: {:?}", r.strip_prefix(dir).unwrap());
                 }
                 println!("");
             }
 
-        } else if buf.starts_with('n') {
+        } else if buf.starts_with('q') {
             return;
         } else {
             println!("invalid input");
@@ -221,19 +232,101 @@ fn select_action(dups: HashMap<u64,Vec<&PathBuf>>,dir: &Path) {
     }
 }
 
-fn interactive_selection<'a>(k:&'a PathBuf,r: &[&'a PathBuf]) -> Foobar<'a> {
-    let mut tmp = Vec::with_capacity(r.len()+1);
+fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
+    // TODO error handling ?
+    let mut tmp = Vec::from(files);
+
+    for x in files {
+        let x_name = file_stem!(x);
+        for y in files {
+            let y_name = file_stem!(y);
+
+            if x_name == y_name && x != y {
+                // bei zwei identischen dateinamen den mit dem kürzerem pfad aussortieren
+                if x.components().count() > y.components().count() {
+                    tmp.retain(|e| e != y) // alles außer y behalten ( y löschen )
+                } else if x.components().count() < y.components().count() {
+                    tmp.retain(|e| e != x)
+                }
+            } else if x_name != y_name && x_name.starts_with(y_name) {
+                // dateinamen mit suffix aussortieren z.b. image.jpg und image(1).jpg
+                if x_name.len() - y_name.len() <= 5 {
+                    tmp.retain(|e| e != x) // alles außer x behalten ( x löschen )
+                } else {
+                    tmp.retain(|e| e != y)
+                }
+            }
+        }
+    }
+
+    // Dateinamen anhand bestimmter prioritäten aussortieren
+    let mut bestname = tmp[0];
+    let mut bestname_prio = 0;
+    for x in &tmp {
+        let n = file_stem!(x);
+        let current_n = file_stem!(bestname);
+        if IS_NUMERIC.is_match(n) {
+            if bestname_prio < 1 || (bestname_prio == 1 && n.len() > current_n.len()) {
+                bestname = x;
+                bestname_prio = 1;
+            }
+        } else if IS_HEX.is_match(n) {
+            if bestname_prio < 2 || (bestname_prio == 2 && n.len() > current_n.len()) {
+                bestname = x;
+                bestname_prio = 2;
+            }
+        } else if IS_ALNUM.is_match(n) {
+            if bestname_prio < 3 || (bestname_prio == 3 && n.len() > current_n.len()) {
+                bestname = x;
+                bestname_prio = 3;
+            }
+        } else if bestname_prio < 4 ||
+                  (bestname_prio == 4 && count_words!(n) > count_words!(current_n)) {
+            bestname = x;
+            bestname_prio = 4;
+        }
+    }
+    let mut tmp = Vec::from(files);
+    tmp.retain(|e| e != &bestname);
+
+    (bestname, tmp)
+}
+
+fn backup_file(fp: &Path, basedir: &Path) -> Result<(), String> {
+    let backupdir = basedir.join(Path::new("duplicates"));
+    let p_bak = backupdir.join(match fp.strip_prefix(basedir) {
+        Ok(v) => v,
+        Err(e) => return Err(format!("convert absolute to relative path: {}", e)),
+    });
+
+    // println!("{:?} -> {:?}", fp, p_bak);
+    if let Err(e) = create_dir_all(match p_bak.parent() {
+        Some(v) => v,
+        None => return Err("Something happened".to_string()),
+    }) {
+        return Err(format!("Create Backup Dir: {}", e));
+    };
+
+    if let Err(e) = rename(fp, &p_bak) {
+        return Err(format!("Move file: {}", e));
+    };
+
+    Ok(())
+}
+
+fn interactive_selection<'a>(basedir: &Path, k: &'a PathBuf, r: &[&'a PathBuf]) -> Foobar<'a> {
+    let mut tmp = Vec::with_capacity(r.len() + 1);
     tmp.push(k);
     tmp.append(&mut Vec::from(r));
 
-    for (i,v) in tmp.iter().enumerate(){
+    for (i, v) in tmp.iter().enumerate() {
         if i == 0 {
-            println!("* ({}): {}",i+1,file_name!(v));
+            println!("* ({}): {}",i+1,v.strip_prefix(basedir).unwrap().display());
         } else {
-            println!("  ({}): {}",i+1,file_name!(v));
+            println!("  ({}): {}",i+1,v.strip_prefix(basedir).unwrap().display());
         }
     }
-    println!("([c]ancel/Return for default [1])");
+    println!("([c]ancel/[s]skip/Enter for default [1])");
     print!("select file to keep: ");
     stdout().flush().unwrap();
     let mut buf = String::new();
@@ -242,7 +335,7 @@ fn interactive_selection<'a>(k:&'a PathBuf,r: &[&'a PathBuf]) -> Foobar<'a> {
 
 
     if IS_NUMERIC.is_match(&buf) {
-        let sel: usize = match buf.parse(){
+        let sel: usize = match buf.parse() {
             Ok(v) => v,
             _ => return Foobar::Invalid,
         };
@@ -254,79 +347,14 @@ fn interactive_selection<'a>(k:&'a PathBuf,r: &[&'a PathBuf]) -> Foobar<'a> {
         tmp.remove(0);
     } else if buf.starts_with('c') {
         return Foobar::Cancel;
+    } else if buf.starts_with('s'){
+        return Foobar::Skip
     } else {
         return Foobar::Invalid;
     }
     println!("delete: {:?}\n",tmp);
 
     Foobar::Ok(tmp)
-}
-
-fn do_stuff(dir: &Path, recursive: bool) {
-    let mut dup_count = 0;
-    let t = SystemTime::now();
-    println!("Pass1...");
-    // pass1
-    let mut pass1_files = HashMap::new();
-
-    if recursive {
-        for entry in WalkDir::new(&dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let meta = entry.metadata().unwrap();
-            if meta.file_type().is_file(){
-                let size = get_size!(meta);
-                pass1_files.entry(size).or_insert_with(Vec::new).push(entry.path().to_owned());
-            }
-        }
-    } else {
-        for entry in read_dir(&dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-        {
-            let meta = entry.metadata().unwrap();
-            if meta.file_type().is_file(){
-                let size = get_size!(meta);
-                pass1_files.entry(size).or_insert_with(Vec::new).push(entry.path().to_owned());
-            }
-        }
-    }
-
-
-    // let pass1_vec: Vec<_> = pass1_files.iter().filter(|&(_,y)| y.len() > 1).map(|(x,y)|y).collect();
-    println!("Pass2: Hashing Files");
-    // pass2
-    let mut pass2_files = HashMap::new();
-    let mut pb = ProgressBar::new(pass1_files.values().filter(|x| x.len() > 1).flat_map(|v|v.iter()).count() as u64);
-    pb.format("8=D~D");
-
-    for entry in pass1_files.values().filter(|x| x.len() > 1).flat_map(|v|v.iter()) {
-        let hash = hash_file(entry);
-
-        let mut list = pass2_files.entry(hash).or_insert_with(Vec::new);
-        if !list.is_empty() {
-            dup_count += 1;
-        }
-        list.push(entry);
-
-        pb.inc();
-    }
-    pb.finish();
-
-    println!("\nPass2 finished");
-    let dt = t.elapsed().unwrap();
-    println!("Time elapsed: {}.{}s",
-             dt.as_secs(),
-             (dt.subsec_nanos() / 1000 / 1000) as u64);
-
-    println!("{} duplicates founds", dup_count);
-
-    if dup_count == 0 {
-        return
-    }
-
-    select_action(pass2_files,dir);
 }
 
 fn hash_file(path: &Path) -> u64 {
@@ -348,16 +376,16 @@ fn hash_file(path: &Path) -> u64 {
     hasher.finish()
 }
 
-fn bytes_to_si(size: usize) -> String {
-    let suffix = ["B", "KiB", "MiB", "GiB", "TiB"];
+fn bytes_to_si(size: u64) -> String {
+    let units = ["B", "KiB", "MiB", "GiB", "TiB"];
     if size == 0 {
         "0 B".to_string()
     } else {
-        let mut px = (size as f64).log(1024.0) as usize;
-        if px > suffix.len() - 1 {
-            px = suffix.len() - 1;
+        let mut p = (size as f64).log(1024.0) as usize;
+        if p > units.len() - 1 {
+            p = units.len() - 1;
         }
         format!("{:.2} {}",
-                (size as f64) / 1024_f64.powi(px as i32), suffix[px])
+                (size as f64) / 1024_f64.powi(p as i32), units[p])
     }
 }
