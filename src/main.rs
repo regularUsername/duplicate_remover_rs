@@ -56,7 +56,7 @@ macro_rules! count_words {
     ($x:expr) => (RE_WORDS.captures_iter($x).count())
 }
 
-enum Foobar<'a> {
+enum Selection<'a> {
     Ok(Vec<&'a PathBuf>),
     Cancel,
     Skip,
@@ -96,37 +96,37 @@ fn do_stuff(dir: &Path, recursive: bool) {
     let mut pass1_cnt = 0u64;
     let mut pass1_size = 0u64;
 
-    // TODO dateien ignorieren die im "duplicates" ordner liegen
     if recursive {
-        for entry in WalkDir::new(&dir)
-            .into_iter()
+        for entry in WalkDir::new(&dir).into_iter()
             .filter_map(|e| e.ok()) {
             match entry.metadata() {
                 Ok(ref m) if m.file_type().is_file() => {
-                    let size = get_size!(m);
-                    pass1_files.entry(size).or_insert_with(Vec::new).push(entry.path().to_owned());
-                    pass1_cnt +=1;
-                    pass1_size += size;
+                    let p = entry.path();
+                    if !p.components().any(|x|x.as_os_str() == "duplicates"){
+                        let size = get_size!(m);
+                        pass1_files.entry(size).or_insert_with(Vec::new).push(p.to_owned());
+                        pass1_cnt +=1;
+                        pass1_size += size;
+                    }
                 }
                 Err(e) => println_stderr!("{:?}",e),
                 _ => (),
-            };
-        }
+            }
+        };
     } else {
-        for entry in read_dir(&dir)
-            .unwrap()
+        for entry in read_dir(&dir).unwrap()
             .filter_map(|e| e.ok()) {
             match entry.metadata() {
                 Ok(ref m) if m.file_type().is_file() => {
                     let size = get_size!(m);
-                    pass1_files.entry(size).or_insert_with(Vec::new).push(entry.path().to_owned());
+                    pass1_files.entry(size).or_insert_with(Vec::new).push(entry.path());
                     pass1_cnt +=1;
                     pass1_size += size;
                 }
                 Err(e) => println_stderr!("{:?}",e),
                 _ => (),
-            };
-        }
+            }
+        };
     }
 
 
@@ -140,7 +140,10 @@ fn do_stuff(dir: &Path, recursive: bool) {
         .count() as u64);
     pb.format("8=D~D");
 
-    for entry in pass1_files.values().filter(|x| x.len() > 1).flat_map(|v| v.iter()) {
+    for entry in pass1_files.values()
+        .filter(|x| x.len() > 1)
+        .flat_map(|v| v.iter()) 
+    {
         let hash = hash_file(entry);
 
         let mut list = pass2_files.entry(hash).or_insert_with(Vec::new);
@@ -196,7 +199,7 @@ fn select_action(dups: HashMap<u64, Vec<&PathBuf>,BuildHasherDefault<XxHash>>, d
                 let (keep, remove) = select_files(entry);
                 loop {
                     match interactive_selection(dir, keep, &remove) {
-                        Foobar::Ok(l) => {
+                        Selection::Ok(l) => {
                             for i in l {
                                 if let Err(e) = backup_file(i, dir) {
                                     println_stderr!("{:?}: {}",i,e);
@@ -204,12 +207,12 @@ fn select_action(dups: HashMap<u64, Vec<&PathBuf>,BuildHasherDefault<XxHash>>, d
                             }
                             break;
                         }
-                        Foobar::Skip => break,
-                        Foobar::Cancel => {
+                        Selection::Skip => break,
+                        Selection::Cancel => {
                             println!("Cancel");
                             return;
                         }
-                        Foobar::Invalid => println!("invalid input"),
+                        Selection::Invalid => println!("invalid input"),
                     };
                 }
             }
@@ -236,7 +239,7 @@ fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
     // TODO error handling ?
     let mut tmp = Vec::from(files);
 
-    for x in files {
+    for x in files { 
         let x_name = file_stem!(x);
         for y in files {
             let y_name = file_stem!(y);
@@ -314,7 +317,7 @@ fn backup_file(fp: &Path, basedir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn interactive_selection<'a>(basedir: &Path, k: &'a PathBuf, r: &[&'a PathBuf]) -> Foobar<'a> {
+fn interactive_selection<'a>(basedir: &Path, k: &'a PathBuf, r: &[&'a PathBuf]) -> Selection<'a> {
     let mut tmp = Vec::with_capacity(r.len() + 1);
     tmp.push(k);
     tmp.append(&mut Vec::from(r));
@@ -337,24 +340,24 @@ fn interactive_selection<'a>(basedir: &Path, k: &'a PathBuf, r: &[&'a PathBuf]) 
     if IS_NUMERIC.is_match(&buf) {
         let sel: usize = match buf.parse() {
             Ok(v) => v,
-            _ => return Foobar::Invalid,
+            _ => return Selection::Invalid,
         };
         if sel > tmp.len() {
-            return Foobar::Invalid;
+            return Selection::Invalid;
         }
         tmp.remove(sel - 1);
     } else if buf.is_empty() {
         tmp.remove(0);
     } else if buf.starts_with('c') {
-        return Foobar::Cancel;
+        return Selection::Cancel;
     } else if buf.starts_with('s'){
-        return Foobar::Skip
+        return Selection::Skip
     } else {
-        return Foobar::Invalid;
+        return Selection::Invalid;
     }
     println!("delete: {:?}\n",tmp);
 
-    Foobar::Ok(tmp)
+    Selection::Ok(tmp)
 }
 
 fn hash_file(path: &Path) -> u64 {
