@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::fs::{File, create_dir_all, rename, read_dir};
 use std::io::{BufReader, BufRead, stdin, stdout, Write};
-use std::hash::{Hasher,BuildHasherDefault};
+use std::hash::{Hasher, BuildHasherDefault};
 use std::time::SystemTime;
 use regex::Regex;
 use clap::{Arg, App};
@@ -24,10 +24,10 @@ use pbr::ProgressBar;
 use walkdir::WalkDir;
 
 lazy_static! {
-    static ref IS_NUMERIC: Regex = Regex::new(r"^[:digit:]+$").unwrap();
-    static ref IS_HEX: Regex = Regex::new(r"^[:xdigit:]+$").unwrap();
-    static ref IS_ALNUM: Regex = Regex::new(r"^[:alnum:]+$").unwrap();
-    static ref RE_WORDS: Regex = Regex::new(r"[:alnum:]{2,}").unwrap();
+    static ref IS_NUMERIC: Regex = Regex::new("^[[:digit:]]+$").unwrap();
+    static ref IS_HEX: Regex = Regex::new("^[[:xdigit:]]+$").unwrap();
+    static ref IS_ALNUM: Regex = Regex::new("^[[:alnum:]]+$").unwrap();
+    static ref RE_WORDS: Regex = Regex::new("[[:alnum:]]{2,}").unwrap();
 }
 
 // TODO idee für zusatzmodus: wenn rekursiv nur duplikate entfernen wenn beide im selbem ordner sind
@@ -97,36 +97,39 @@ fn do_stuff(dir: &Path, recursive: bool) {
     let mut pass1_size = 0u64;
 
     if recursive {
-        for entry in WalkDir::new(&dir).into_iter()
+        for entry in WalkDir::new(&dir)
+            .follow_links(true)
+            .into_iter()
             .filter_map(|e| e.ok()) {
             match entry.metadata() {
                 Ok(ref m) if m.file_type().is_file() => {
                     let p = entry.path();
-                    if !p.components().any(|x|x.as_os_str() == "duplicates"){
+                    if !p.components().any(|x| x.as_os_str() == "duplicates") {
                         let size = get_size!(m);
                         pass1_files.entry(size).or_insert_with(Vec::new).push(p.to_owned());
-                        pass1_cnt +=1;
+                        pass1_cnt += 1;
                         pass1_size += size;
                     }
                 }
-                Err(e) => println_stderr!("{:?}",e),
+                Err(e) => println_stderr!("{:?}", e),
                 _ => (),
             }
-        };
+        }
     } else {
-        for entry in read_dir(&dir).unwrap()
+        for entry in read_dir(&dir)
+            .unwrap()
             .filter_map(|e| e.ok()) {
             match entry.metadata() {
                 Ok(ref m) if m.file_type().is_file() => {
                     let size = get_size!(m);
                     pass1_files.entry(size).or_insert_with(Vec::new).push(entry.path());
-                    pass1_cnt +=1;
+                    pass1_cnt += 1;
                     pass1_size += size;
                 }
-                Err(e) => println_stderr!("{:?}",e),
+                Err(e) => println_stderr!("{:?}", e),
                 _ => (),
             }
-        };
+        }
     }
 
 
@@ -142,8 +145,7 @@ fn do_stuff(dir: &Path, recursive: bool) {
 
     for entry in pass1_files.values()
         .filter(|x| x.len() > 1)
-        .flat_map(|v| v.iter()) 
-    {
+        .flat_map(|v| v.iter()) {
         let hash = hash_file(entry);
 
         let mut list = pass2_files.entry(hash).or_insert_with(Vec::new);
@@ -165,8 +167,12 @@ fn do_stuff(dir: &Path, recursive: bool) {
              dt.as_secs(),
              (dt.subsec_nanos() / 1000 / 1000) as u64);
 
-    println!("Scanned {} file(s) ({})",pass1_cnt,bytes_to_si(pass1_size));
-    println!("{} duplicates founds ({})", dup_count,bytes_to_si(dup_size));
+    println!("Scanned {} file(s) ({})",
+             pass1_cnt,
+             bytes_to_si(pass1_size));
+    println!("{} duplicates founds ({})",
+             dup_count,
+             bytes_to_si(dup_size));
 
     if dup_count == 0 {
         return;
@@ -175,9 +181,11 @@ fn do_stuff(dir: &Path, recursive: bool) {
     select_action(pass2_files, dir);
 }
 
-fn select_action(dups: HashMap<u64, Vec<&PathBuf>,BuildHasherDefault<XxHash>>, dir: &Path) {
+fn select_action(dups: HashMap<u64, Vec<&PathBuf>, BuildHasherDefault<XxHash>>, dir: &Path) {
     loop {
-        print!("remove all duplicates?(backup in {:?}) ([y]es/[i]nteractive mode/[q]uit/[p]rint): ",dir.join("duplicates"));
+        print!("remove all duplicates?(backup in {:?}) ([y]es/[i]nteractive \
+                mode/[q]uit/[p]rint): ",
+               dir.join("duplicates"));
         stdout().flush().unwrap();
         let mut buf = String::new();
         stdin().read_line(&mut buf).unwrap();
@@ -188,7 +196,7 @@ fn select_action(dups: HashMap<u64, Vec<&PathBuf>,BuildHasherDefault<XxHash>>, d
                 let (_, remove) = select_files(entry);
                 for r in remove {
                     if let Err(e) = backup_file(r, dir) {
-                        println_stderr!("{:?}: {}",r,e);
+                        println_stderr!("{:?}: {}", r, e);
                     }
                 }
             }
@@ -202,7 +210,7 @@ fn select_action(dups: HashMap<u64, Vec<&PathBuf>,BuildHasherDefault<XxHash>>, d
                         Selection::Ok(l) => {
                             for i in l {
                                 if let Err(e) = backup_file(i, dir) {
-                                    println_stderr!("{:?}: {}",i,e);
+                                    println_stderr!("{:?}: {}", i, e);
                                 }
                             }
                             break;
@@ -239,7 +247,7 @@ fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
     // TODO error handling ?
     let mut tmp = Vec::from(files);
 
-    for x in files { 
+    for x in files {
         let x_name = file_stem!(x);
         for y in files {
             let y_name = file_stem!(y);
@@ -266,29 +274,29 @@ fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
     let mut bestname = tmp[0];
     let mut bestname_prio = 0;
     for x in &tmp {
-        let n = file_stem!(x);
-        let current_n = file_stem!(bestname);
-        if IS_NUMERIC.is_match(n) {
-            if bestname_prio < 1 || (bestname_prio == 1 && n.len() > current_n.len()) {
+            let n = file_stem!(x);
+            let current_n = file_stem!(bestname);
+            if IS_NUMERIC.is_match(n) {
+                if bestname_prio < 1 || (bestname_prio == 1 && n.len() > current_n.len()) {
+                    bestname = x;
+                    bestname_prio = 1;
+                }
+            } else if IS_HEX.is_match(n) {
+                if bestname_prio < 2 || (bestname_prio == 2 && n.len() > current_n.len()) {
+                    bestname = x;
+                    bestname_prio = 2;
+                }
+            } else if IS_ALNUM.is_match(n) {
+                if bestname_prio < 3 || (bestname_prio == 3 && n.len() > current_n.len()) {
+                    bestname = x;
+                    bestname_prio = 3;
+                }
+            } else if bestname_prio < 4 ||
+                    (bestname_prio == 4 && count_words!(n) > count_words!(current_n)) {
                 bestname = x;
-                bestname_prio = 1;
+                bestname_prio = 4;
             }
-        } else if IS_HEX.is_match(n) {
-            if bestname_prio < 2 || (bestname_prio == 2 && n.len() > current_n.len()) {
-                bestname = x;
-                bestname_prio = 2;
-            }
-        } else if IS_ALNUM.is_match(n) {
-            if bestname_prio < 3 || (bestname_prio == 3 && n.len() > current_n.len()) {
-                bestname = x;
-                bestname_prio = 3;
-            }
-        } else if bestname_prio < 4 ||
-                  (bestname_prio == 4 && count_words!(n) > count_words!(current_n)) {
-            bestname = x;
-            bestname_prio = 4;
         }
-    }
     let mut tmp = Vec::from(files);
     tmp.retain(|e| e != &bestname);
 
@@ -324,9 +332,13 @@ fn interactive_selection<'a>(basedir: &Path, k: &'a PathBuf, r: &[&'a PathBuf]) 
 
     for (i, v) in tmp.iter().enumerate() {
         if i == 0 {
-            println!("* ({}): {}",i+1,v.strip_prefix(basedir).unwrap().display());
+            println!("* ({}): {}",
+                     i + 1,
+                     v.strip_prefix(basedir).unwrap().display());
         } else {
-            println!("  ({}): {}",i+1,v.strip_prefix(basedir).unwrap().display());
+            println!("  ({}): {}",
+                     i + 1,
+                     v.strip_prefix(basedir).unwrap().display());
         }
     }
     println!("([c]ancel/[s]skip/Enter for default [1])");
@@ -350,14 +362,32 @@ fn interactive_selection<'a>(basedir: &Path, k: &'a PathBuf, r: &[&'a PathBuf]) 
         tmp.remove(0);
     } else if buf.starts_with('c') {
         return Selection::Cancel;
-    } else if buf.starts_with('s'){
-        return Selection::Skip
+    } else if buf.starts_with('s') {
+        return Selection::Skip;
     } else {
         return Selection::Invalid;
     }
-    println!("delete: {:?}\n",tmp);
+    println!("delete: {:?}\n", tmp);
 
     Selection::Ok(tmp)
+}
+use std::io::Read;
+
+fn hash_reader<R: Read, H: Hasher>(reader: R, mut hasher: H) -> u64 {
+    let mut br = BufReader::new(reader);
+    loop {
+        let buf_size = {
+            let buf = br.fill_buf().unwrap();
+            if buf.is_empty() {
+                break;
+            } else {
+                hasher.write(buf);
+            }
+            buf.len()
+        };
+        br.consume(buf_size);
+    }
+    hasher.finish()
 }
 
 fn hash_file(path: &Path) -> u64 {
@@ -389,6 +419,7 @@ fn bytes_to_si(size: u64) -> String {
             p = units.len() - 1;
         }
         format!("{:.2} {}",
-                (size as f64) / 1024_f64.powi(p as i32), units[p])
+                (size as f64) / 1024_f64.powi(p as i32),
+                units[p])
     }
 }
