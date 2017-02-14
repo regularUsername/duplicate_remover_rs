@@ -243,10 +243,10 @@ fn select_action(dups: HashMap<u64, Vec<&PathBuf>, BuildHasherDefault<XxHash>>, 
     }
 }
 
-fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
+pub fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
     // TODO error handling ?
     let mut tmp = Vec::from(files);
-
+    println!("{:?}",tmp);
     for x in files {
         let x_name = file_stem!(x);
         for y in files {
@@ -259,16 +259,13 @@ fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
                 } else if x.components().count() < y.components().count() {
                     tmp.retain(|e| e != x)
                 }
-            } else if x_name != y_name && x_name.starts_with(y_name) {
+            } else if x_name != y_name && x_name.starts_with(y_name) && x_name.len() - y_name.len() <= 5 {
                 // dateinamen mit suffix aussortieren z.b. image.jpg und image(1).jpg
-                if x_name.len() - y_name.len() <= 5 {
-                    tmp.retain(|e| e != x) // alles außer x behalten ( x löschen )
-                } else {
-                    tmp.retain(|e| e != y)
-                }
+                tmp.retain(|e| e != x) // alles außer x behalten ( x löschen )
             }
         }
     }
+
 
     // Dateinamen anhand bestimmter prioritäten aussortieren
     let mut bestname = tmp[0];
@@ -421,5 +418,63 @@ fn bytes_to_si(size: u64) -> String {
         format!("{:.2} {}",
                 (size as f64) / 1024_f64.powi(p as i32),
                 units[p])
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super ::*;
+
+    #[test]
+    fn select_files1(){
+        let a = PathBuf::from("12345.bin");
+        let b = PathBuf::from("3898d553.bin");
+        let (x,_) = select_files(&[&a,&b]);
+        assert_eq!(&b,x);
+    }
+
+    #[test]
+    fn select_files2(){
+        let a = PathBuf::from("we1223ffqwe21.bin");
+        let b = PathBuf::from("3898d553.bin");
+        let c = PathBuf::from("3898d553.bin");
+        let (x,_) = select_files(&[&a,&b,&c]);
+        assert_eq!(&a,x);
+    }
+
+    #[test]
+    fn select_files3(){
+        let a = PathBuf::from("12351235.bin");
+        let b = PathBuf::from("512363453534.bin");
+        let (x,_) = select_files(&[&a,&b]);
+        assert_eq!(&b,x);
+    }
+
+    #[test]
+    fn select_files4(){
+        let a = PathBuf::from("5123.bin");
+        let b = PathBuf::from("12351235.bin");
+        let c = PathBuf::from("12351235(1).bin");
+        let (x,_) = select_files(&[&a,&b,&c]);
+        assert_eq!(&b,x);
+    }
+
+    #[test]
+    fn select_files5(){
+        let a = PathBuf::from("blabla.bin");
+        let b = PathBuf::from("blablablabla foobar.bin");
+        let c = PathBuf::from("bla bla foo bar.bin");
+        let (keep,_) = select_files(&[&a,&b,&c]);
+        assert_eq!(&c,keep);
+    }
+
+    #[test]
+    fn select_files6(){
+        let a = PathBuf::from("12351235.bin");
+        let b = PathBuf::from("12351235(1).bin");
+        let c = PathBuf::from("12351235(1)(1).bin");
+        let (keep,_) = select_files(&[&a,&b,&c]);
+        assert_eq!(&a,keep);
     }
 }
