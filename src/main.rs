@@ -3,7 +3,7 @@ extern crate lazy_static;
 extern crate regex;
 extern crate clap;
 extern crate twox_hash;
-extern crate pbr;
+extern crate indicatif;
 extern crate walkdir;
 
 #[cfg(unix)]
@@ -20,7 +20,7 @@ use std::time::SystemTime;
 use regex::Regex;
 use clap::{Arg, App};
 use twox_hash::XxHash;
-use pbr::ProgressBar;
+use indicatif::{ProgressBar,ProgressStyle};
 use walkdir::WalkDir;
 use std::hash::BuildHasher;
 
@@ -110,11 +110,15 @@ fn do_stuff(dir: &Path, recursive: bool) {
     let mut dup_count = 0u64;
     let mut dup_size = 0u64;
     let t = SystemTime::now();
-    println!("Pass1...");
+    // println!("Pass1...");
     // pass1
     let mut pass1_files: HashMap<_, _, NaiveBuildHasher> = Default::default();
     let mut pass1_cnt = 0u64;
     let mut pass1_size = 0u64;
+
+    let pb1 = ProgressBar::new(0);
+    pb1.set_style(ProgressStyle::default_spinner());
+    pb1.set_message("Pass1: Searching Files");
 
     if recursive {
         for entry in WalkDir::new(&dir)
@@ -132,6 +136,7 @@ fn do_stuff(dir: &Path, recursive: bool) {
                             .push(p.to_owned());
                         pass1_cnt += 1;
                         pass1_size += size;
+                        pb1.inc(1);
                     }
                 }
                 Err(e) => println_stderr!("{:?}", e),
@@ -149,24 +154,26 @@ fn do_stuff(dir: &Path, recursive: bool) {
                         .push(entry.path());
                     pass1_cnt += 1;
                     pass1_size += size;
+                    pb1.inc(1);
                 }
                 Err(e) => println_stderr!("{:?}", e),
                 _ => (),
             }
         }
     }
+    pb1.finish();
 
 
     // let pass1_vec: Vec<_> = pass1_files.iter().filter(|&(_,y)| y.len() > 1).map(|(x,y)|y).collect();
     println!("Pass2: Hashing Files");
     // pass2
     let mut pass2_files: HashMap<_, _, NaiveBuildHasher> = Default::default();
-    let mut pb = ProgressBar::new(pass1_files
+    let pb = ProgressBar::new(pass1_files
                                       .values()
                                       .filter(|x| x.len() > 1)
                                       .flat_map(|v| v)
                                       .count() as u64);
-    pb.format("8=D~D");
+
 
     for entry in pass1_files
             .values()
@@ -183,7 +190,7 @@ fn do_stuff(dir: &Path, recursive: bool) {
         }
         list.push(entry);
 
-        pb.inc();
+        pb.inc(1);
     }
     pb.finish();
 

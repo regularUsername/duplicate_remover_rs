@@ -9,7 +9,6 @@ regex = "*"
 lazy_static = "*"
 twox-hash = "*"
 clap = "*"
-[dependencies.pbr]
-git = "https://github.com/a8m/pb.git"
+indicatif = "*"
 
 
