@@ -164,14 +164,14 @@ fn do_stuff(dir: &Path, recursive: bool) {
     let mut pb = ProgressBar::new(pass1_files
                                       .values()
                                       .filter(|x| x.len() > 1)
-                                      .flat_map(|v| v.iter())
+                                      .flat_map(|v| v)
                                       .count() as u64);
     pb.format("8=D~D");
 
     for entry in pass1_files
             .values()
             .filter(|x| x.len() > 1)
-            .flat_map(|v| v.iter()) {
+            .flat_map(|v| v) {
         let hash = hash_file(entry);
 
         let mut list = pass2_files.entry(hash).or_insert_with(Vec::new);
