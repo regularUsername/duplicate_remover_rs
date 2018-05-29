@@ -16,7 +16,7 @@ use std::os::windows::fs::MetadataExt;
 
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
-use std::fs::{File, create_dir_all, rename, read_dir};
+use std::fs::{File, create_dir_all, rename, read_dir,remove_file};
 use std::io::{BufReader, BufRead, stdin, stdout, Write};
 use std::hash::{Hasher, BuildHasherDefault};
 use std::time::SystemTime;
@@ -26,6 +26,7 @@ use twox_hash::XxHash;
 use indicatif::{ProgressBar,ProgressStyle};
 use walkdir::WalkDir;
 use std::hash::BuildHasher;
+use std::error::Error;
 
 lazy_static! {
     static ref IS_NUMERIC: Regex = Regex::new("^[[:digit:]]+$").unwrap();
@@ -92,9 +93,12 @@ fn main() {
         .version("0.1")
         .about("Finds and removes duplicate files (prioritizing the best name)")
         .arg(Arg::with_name("recursive")
-                 .help("Searches duplicate files in subdirectories")
-                 .short("r")
-                 .long("recursive"))
+            .help("Searches duplicate files in subdirectories")
+            .short("r")
+            .long("recursive"))
+        .arg(Arg::with_name("no_backup")
+            .help("Delete files instead of just moving them")
+            .long("no-backup"))
         .arg(Arg::with_name("directory")
             .required(true)
             .multiple(true))
@@ -106,16 +110,11 @@ fn main() {
         return;
     }
     println!("{:?}",directories);
-    do_stuff(&directories,matches.is_present("recursive"));
-    // let dir = Path::new(directory);
-    // if !dir.is_dir() {
-    //     println_stderr!("Not valid Directory");
-    //     return;
-    // }
-    // do_stuff(dir, matches.is_present("recursive"));
+    do_stuff(&directories,matches.is_present("recursive"),!matches.is_present("no_backup"));
+
 }
 
-fn do_stuff(dirs: &[&Path], recursive: bool) {
+fn do_stuff(dirs: &[&Path], recursive: bool, backup: bool) {
     let mut dup_count = 0u64;
     let mut dup_size = 0u64;
     let t = SystemTime::now();
@@ -126,50 +125,49 @@ fn do_stuff(dirs: &[&Path], recursive: bool) {
     let mut pass1_size = 0u64;
 
     let pb1 = ProgressBar::new_spinner();
-    pb1.set_style(ProgressStyle::default_spinner()
-        .template("Pass1: Searching Files {spinner:.green} [{elapsed_precise}]"));
-    for dir in dirs{
-    if recursive {
-        for entry in WalkDir::new(&dir)
-                .follow_links(true)
-                .into_iter()
-                .filter_map(|e| e.ok()) {
-            match entry.metadata() {
-                Ok(ref m) if m.file_type().is_file() => {
-                    let p = entry.path();
-                    if !p.components().any(|x| x.as_os_str() == "duplicates") {
+    pb1.set_style(ProgressStyle::default_spinner().template("Pass1: Searching Files {spinner:.green} [{elapsed_precise}]"));
+    for dir in dirs {
+        if recursive {
+            for entry in WalkDir::new(&dir)
+                    .follow_links(true)
+                    .into_iter()
+                    .filter_map(|e| e.ok()) {
+                match entry.metadata() {
+                    Ok(ref m) if m.file_type().is_file() => {
+                        let p = entry.path();
+                        if !p.iter().any(|x| x == "duplicates") {
+                            let size = get_size!(m);
+                            pass1_files
+                                .entry(size)
+                                .or_insert_with(Vec::new)
+                                .push(p.to_owned());
+                            pass1_cnt += 1;
+                            pass1_size += size;
+                            pb1.inc(1);
+                        }
+                    }
+                    Err(e) => println_stderr!("{:?}", e),
+                    _ => (),
+                }
+            }
+        } else {
+            for entry in read_dir(&dir).unwrap().filter_map(|e| e.ok()) {
+                match entry.metadata() {
+                    Ok(ref m) if m.file_type().is_file() => {
                         let size = get_size!(m);
                         pass1_files
                             .entry(size)
                             .or_insert_with(Vec::new)
-                            .push(p.to_owned());
+                            .push(entry.path());
                         pass1_cnt += 1;
                         pass1_size += size;
                         pb1.inc(1);
                     }
+                    Err(e) => println_stderr!("{:?}", e),
+                    _ => (),
                 }
-                Err(e) => println_stderr!("{:?}", e),
-                _ => (),
             }
         }
-    } else {
-        for entry in read_dir(&dir).unwrap().filter_map(|e| e.ok()) {
-            match entry.metadata() {
-                Ok(ref m) if m.file_type().is_file() => {
-                    let size = get_size!(m);
-                    pass1_files
-                        .entry(size)
-                        .or_insert_with(Vec::new)
-                        .push(entry.path());
-                    pass1_cnt += 1;
-                    pass1_size += size;
-                    pb1.inc(1);
-                }
-                Err(e) => println_stderr!("{:?}", e),
-                _ => (),
-            }
-        }
-    }
     }
     pb1.finish();
 
@@ -192,8 +190,7 @@ fn do_stuff(dirs: &[&Path], recursive: bool) {
             .filter(|x| x.len() > 1)
             .flat_map(|v| v) {
         let hash = hash_file(entry);
-
-        let mut list = pass2_files.entry(hash).or_insert_with(Vec::new);
+        let list = pass2_files.entry(hash).or_insert_with(Vec::new);
         if !list.is_empty() {
             dup_count += 1;
             if let Ok(m) = entry.metadata() {
@@ -208,83 +205,88 @@ fn do_stuff(dirs: &[&Path], recursive: bool) {
 
     println!("\nPass2 finished");
     let dt = t.elapsed().unwrap();
-    println!("Time elapsed: {}.{}s",
-             dt.as_secs(),
-             (dt.subsec_nanos() / 1000 / 1000) as u64);
-
-    println!("Scanned {} file(s) ({})",
-             pass1_cnt,
-             bytes_to_si(pass1_size));
-    println!("{} duplicates founds ({})",
-             dup_count,
-             bytes_to_si(dup_size));
+    println!("Time elapsed: {}.{}s", dt.as_secs(), dt.subsec_nanos() / 1000 / 1000);
+    println!("Scanned {} file(s) ({})", pass1_cnt, bytes_to_si(pass1_size));
+    println!("{} duplicates founds ({})", dup_count, bytes_to_si(dup_size));
 
     if dup_count == 0 {
         return;
     }
 
-    select_action(&pass2_files);
+    if let Err(e) = select_action(&pass2_files,backup){
+        println_stderr!("Error: {}",e);
+    }
 }
 
-fn select_action<S: BuildHasher>(dups: &HashMap<u64, Vec<&PathBuf>, S>) {
-    let dir = std::env::current_dir().unwrap().join("duplicates");
+fn select_action<S: BuildHasher>(dups: &HashMap<u64, Vec<&PathBuf>, S>, backup:bool) -> Result<(), Box<Error>> {
+    let backup_dir = std::env::current_dir()?.join("duplicates");
     loop {
-        print!("remove all duplicates?(backup in {:?}) ([y]es/[i]nteractive mode/[q]uit/[p]rint): ", dir);
-        stdout().flush().unwrap();
+        if backup {
+            print!("remove all duplicates?(backup in {:?}) ([y]es/[i]nteractive mode/[q]uit/[p]rint): ", backup_dir);
+        } else {
+            print!("permanently delete all duplicates?([y]es/[i]nteractive mode/[q]uit/[p]rint");
+        }
+        stdout().flush()?;
         let mut buf = String::new();
-        stdin().read_line(&mut buf).unwrap();
-        let buf = buf.trim().to_lowercase();
+        stdin().read_line(&mut buf)?;
+        let buf = buf.to_lowercase();
 
-        if buf.starts_with('y') {
-            for entry in dups.values().filter(|x| x.len() > 1) {
-                let (_, remove) = select_files(entry);
-                for r in remove {
-                    if let Err(e) = backup_file(r, &dir) {
-                        println_stderr!("{:?}: {}", r, e);
+        match buf.chars().nth(0).ok_or("Something happened")? {
+            'y' => {
+                for entry in dups.values().filter(|x| x.len() > 1) {
+                    let (_, remove) = select_files(entry);
+                    for r in remove {
+                        if backup {
+                            backup_file(r, &backup_dir)?
+                        } else {
+                            remove_file(r)?
+                        }
                     }
                 }
-            }
-            break;
-        } else if buf.starts_with('i') {
-            println!("Interactive Mode:");
-            for entry in dups.values().filter(|x| x.len() > 1) {
-                let (keep, remove) = select_files(entry);
-                loop {
-                    match interactive_selection(keep, &remove) {
-                        Selection::Ok(l) => {
-                            for i in l {
-                                if let Err(e) = backup_file(i, &dir) {
-                                    println_stderr!("{:?}: {}", i, e);
+                break;
+            },
+            'i' => {
+                println!("Interactive Mode:");
+                for entry in dups.values().filter(|x| x.len() > 1) {
+                    let (keep, remove) = select_files(entry);
+                    loop {
+                        match interactive_selection(keep, &remove) {
+                            Selection::Ok(l) => {
+                                for i in l {
+                                    if backup {
+                                        backup_file(i, &backup_dir)?
+                                    } else {
+                                        remove_file(i)?
+                                    }
                                 }
+                                break;
                             }
-                            break;
-                        }
-                        Selection::Skip => break,
-                        Selection::Cancel => {
-                            println!("Cancel");
-                            return;
-                        }
-                        Selection::Invalid => println!("invalid input"),
-                    };
+                            Selection::Skip => break,
+                            Selection::Cancel => {
+                                println!("Cancel");
+                                return Ok(());
+                            }
+                            Selection::Invalid => println!("invalid input"),
+                        };
+                    }
                 }
-            }
-            break;
-        } else if buf.starts_with('p') {
-            for entry in dups.values().filter(|x| x.len() > 1) {
-                let (keep, remove) = select_files(entry);
-                println!("keep  : {:?}", keep);
-                for r in remove {
-                    println!("delete: {:?}", r);
+                break;
+            },
+            'p' => {
+                for entry in dups.values().filter(|x| x.len() > 1) {
+                    let (keep, remove) = select_files(entry);
+                    println!("keep  : {:?}", keep);
+                    for r in remove {
+                        println!("delete: {:?}", r);
+                    }
+                    println!();
                 }
-                println!("");
-            }
-
-        } else if buf.starts_with('q') {
-            return;
-        } else {
-            println!("invalid input");
+            },
+            'q' => return Ok(()),
+            _ => println!("invalid input"),
         }
     }
+    Ok(())
 }
 
 pub fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
@@ -344,22 +346,10 @@ pub fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>
     (bestname, tmp)
 }
 
-fn backup_file(fp: &Path, backup_dir: &Path) -> Result<(), String> {
-    let p_bak = backup_dir.join(fp.file_name().unwrap());
-
-    // println!("{:?} -> {:?}", fp, p_bak);
-    if let Err(e) = create_dir_all(
-        match p_bak.parent() {
-            Some(v) => v,
-            None => return Err("Something happened".to_string()),
-        }) {
-    return Err(format!("Create Backup Dir: {}", e));
-    };
-
-    if let Err(e) = rename(fp, &p_bak) {
-        return Err(format!("Move file: {}", e));
-    };
-
+fn backup_file(fp: &Path, backup_dir: &Path) -> Result<(), Box<Error>> {
+    let p_bak = backup_dir.join(fp.file_name().ok_or("can't get filename")?);
+    create_dir_all(p_bak.parent().ok_or("can't get parent directory")?)?;
+    rename(fp, &p_bak)?;
     Ok(())
 }
 
