@@ -2,9 +2,9 @@
 name = "chan_dupes_rs"
 version = "0.1.0"
 authors = ["Darryl Imhof <darryl.imhof@gmail.com>"]
+edition = "2018"
 
 [dependencies]
-walkdir = "*"
 regex = "*"
 lazy_static = "*"
 twox-hash = "*"
