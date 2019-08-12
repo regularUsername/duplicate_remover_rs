@@ -1,5 +1,4 @@
-// #[cfg(test)]
-// mod tests {
+
 use super::*;
 
 #[test]
@@ -53,4 +52,3 @@ fn test_select_files6() {
     let (keep, _) = select_files(&[&a, &b, &c]);
     assert_eq!(&a, keep);
 }
-// }

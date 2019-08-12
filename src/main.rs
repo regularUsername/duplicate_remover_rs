@@ -1,3 +1,4 @@
+#![feature(test)]
 #[macro_use]
 extern crate lazy_static;
 extern crate clap;
@@ -43,17 +44,28 @@ macro_rules! println_stderr(
 
 #[cfg(unix)]
 macro_rules! get_size {
-    ($x:expr) => {
-        $x.size()
-    };
+    ($x:expr) => { $x.size() };
 }
 
 #[cfg(windows)]
 macro_rules! get_size {
-    ($x:expr) => {
-        $x.file_size()
-    };
+    ($x:expr) => { $x.file_size() };
 }
+
+// trait GetFileSize{
+//     fn get_file_size(&self)-> u64;
+// }
+
+// impl GetFileSize for std::fs::Metadata {
+//     #[cfg(windows)]
+//     fn get_file_size(&self)-> u64 {
+//         self.file_size()
+//     }
+//     #[cfg(unix)]
+//     fn get_file_size(&self)-> u64 {
+//         self.size()
+//     }
+// }
 
 macro_rules! file_stem {
     ($x:expr) => {
@@ -239,7 +251,7 @@ fn do_stuff(dirs: &[&Path], recursive: bool, backup: bool) {
 fn select_action(
     dups: &HashMap<u64, Vec<&PathBuf>, impl BuildHasher>,
     backup: bool,
-) -> Result<(), Box<Error>> {
+) -> Result<(), Box<dyn Error>> {
     let backup_dir = std::env::current_dir()?.join("duplicates");
     loop {
         if backup {
@@ -251,8 +263,10 @@ fn select_action(
         let mut buf = String::new();
         stdin().read_line(&mut buf)?;
         let buf = buf.to_lowercase();
-
-        match buf.chars().nth(0).ok_or("Something happened")? {
+        if buf.is_empty() {
+            continue
+        }
+        match buf.chars().nth(0).unwrap() { // unwrap hier ok weil buf bereits darauf geprüft wurde ob er leer ist
             'y' => {
                 for entry in dups.values().filter(|x| x.len() > 1) {
                     let (_, remove) = select_files(entry);
@@ -264,7 +278,9 @@ fn select_action(
             }
             'i' => {
                 println!("Interactive Mode:");
-                for entry in dups.values().filter(|x| x.len() > 1) {
+                let cnt = dups.values().filter(|x| x.len() > 1).count();
+                for (idx,entry) in dups.values().filter(|x| x.len() > 1).enumerate() {
+                    println!("File {} of {}",idx+1,cnt);
                     let (keep, remove) = select_files(entry);
                     loop {
                         match interactive_selection(keep, &remove) {
@@ -362,7 +378,7 @@ pub fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>
     (bestname, tmp)
 }
 
-fn delete_file(fp: &Path, backup: bool, backup_dir: &Path) -> Result<(), Box<Error>> {
+fn delete_file(fp: &Path, backup: bool, backup_dir: &Path) -> Result<(), Box<dyn Error>> {
     if backup {
         let p_bak = backup_dir.join(fp.file_name().ok_or("can't get filename")?);
         create_dir_all(p_bak.parent().ok_or("can't get parent directory")?)?;
