@@ -42,30 +42,22 @@ macro_rules! println_stderr(
     } }
 );
 
-#[cfg(unix)]
-macro_rules! get_size {
-    ($x:expr) => { $x.size() };
+// metadata um eine platformunabhängige methode 
+// zum abfragen der dateigröße erweitern
+ trait GetFileSize{
+     fn get_file_size(&self)-> u64;
+ }
+
+impl GetFileSize for std::fs::Metadata {
+    #[cfg(windows)]
+    fn get_file_size(&self)-> u64 {
+        self.file_size()
+    }
+    #[cfg(unix)]
+    fn get_file_size(&self)-> u64 {
+        self.size()
+    }
 }
-
-#[cfg(windows)]
-macro_rules! get_size {
-    ($x:expr) => { $x.file_size() };
-}
-
-// trait GetFileSize{
-//     fn get_file_size(&self)-> u64;
-// }
-
-// impl GetFileSize for std::fs::Metadata {
-//     #[cfg(windows)]
-//     fn get_file_size(&self)-> u64 {
-//         self.file_size()
-//     }
-//     #[cfg(unix)]
-//     fn get_file_size(&self)-> u64 {
-//         self.size()
-//     }
-// }
 
 macro_rules! file_stem {
     ($x:expr) => {
@@ -157,7 +149,8 @@ fn visit_dirs(
             Ok(ref m) if m.file_type().is_file() => {
                 let p = entry.path();
                 if !p.iter().any(|x| x == "duplicates") {
-                    let size = get_size!(m);
+                    // let size = get_size!(m);
+                    let size = m.get_file_size();
                     hm.entry(size).or_insert_with(Vec::new).push(p.to_owned());
                     *cnt += 1;
                     *fs += size;
@@ -220,7 +213,8 @@ fn do_stuff(dirs: &[&Path], recursive: bool, backup: bool) {
         if !list.is_empty() {
             dup_count += 1;
             if let Ok(m) = entry.metadata() {
-                dup_size += get_size!(m)
+                // dup_size += get_size!(m)
+                dup_size += m.get_file_size();
             };
         }
         list.push(entry);
@@ -318,7 +312,7 @@ fn select_action(
     Ok(())
 }
 
-pub fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
+fn select_files<'a>(files: &[&'a PathBuf]) -> (&'a PathBuf, Vec<&'a PathBuf>) {
     // TODO error handling ?
     let mut tmp = Vec::from(files);
 
