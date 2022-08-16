@@ -1,4 +1,3 @@
-#![feature(test)]
 #[macro_use]
 extern crate lazy_static;
 extern crate clap;
@@ -108,7 +107,7 @@ fn main() {
         .arg(
             Arg::with_name("recursive")
                 .help("Searches duplicate files in subdirectories")
-                .short("r")
+                .short('r')
                 .long("recursive"),
         )
         .arg(
@@ -179,7 +178,7 @@ fn do_stuff(dirs: &[&Path], recursive: bool, backup: bool) {
     let pb1 = ProgressBar::new_spinner();
     pb1.set_style(
         ProgressStyle::default_spinner()
-            .template("Pass1: Searching Files {spinner:.green} [{elapsed_precise}]"),
+            .template("Pass1: Searching Files {spinner:.green} [{elapsed_precise}]").unwrap(),
     );
     for dir in dirs {
         visit_dirs(
@@ -204,7 +203,7 @@ fn do_stuff(dirs: &[&Path], recursive: bool, backup: bool) {
             .count() as u64,
     );
     pb2.set_style(ProgressStyle::default_bar()
-    .template("Pass2: Hashing Files {spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos:>7}/{len:7} ETA: {eta} ")
+    .template("Pass2: Hashing Files {spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos:>7}/{len:7} ETA: {eta} ").unwrap()
     .progress_chars("=D~8"));
 
     for entry in pass1_files.values().filter(|x| x.len() > 1).flat_map(|v| v) {

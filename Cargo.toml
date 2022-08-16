@@ -1,8 +1,7 @@
 [package]
-name = "chan_dupes_rs"
+name = "duplicate_remover_rs"
 version = "0.1.0"
-authors = ["Darryl Imhof <darryl.imhof@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 regex = "*"
